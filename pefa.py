@@ -11,7 +11,12 @@ import glob
 # report language and primary, secondary, and tertiary keywords to use for table detection
 # TODO: deal with non-English docs
 config = {
-    'English': ("(?:Calculation(?:s)?|Data) (?:.* )?pi", ['budg(?:et)?', '(?:actu(?:al)?)'], ['data for year', 'deviation', 'administrative']),
+    'English': ("(?:Calculation(?:s)?|Data) (?:.* )?pi",
+                ['budg(?:et)?', '(?:actu(?:al)?)'],
+                ['data for year', 'deviation', 'administrative']),
+    'French': ("(?:Calcul(?:s)?|données|Composition des dépenses effectives) (?:.* )?pi",
+               ['(?:prévu|Budg)', '(?:réalis|Ajusté|adjusted)'],
+               ["(?:Données pour (?:(?:l’)?année|l'exercice)|Data of year)", 'administra']),
 }
 
 def get_pdf_file_path(link_to_content, language, country):
@@ -37,9 +42,11 @@ def download_pdf(link_to_content, language, country):
 def page_has_table(pdf_path, page):
     return len(tabula.read_pdf(pdf_path, pages=page)) > 0
 
-def find_tables(language):
+def find_tables(language, only_pdf=None):
     keyword, secondary_keywords, tertiary_keywords = config[language]
     for report in sorted(glob.glob(f'data/pdfs/{language}_*.pdf')):
+        if only_pdf and report != only_pdf:
+            continue
         obj = PyPDF2.PdfFileReader(report)
         num_pages = obj.getNumPages()
         start_page = num_pages // 3 * 2 # assume the annex is in the last third of all pages
@@ -86,7 +93,7 @@ def find_tables(language):
                     start_identified = True
                     break
             if not start_identified:
-                print(f'[WARNING] start page not found for {report}!!! candidates: {candidates}')
+                print(f'[WARNING] start page not found for {report}!!! {len(candidates)} candidates: {[c[0]+1 for c in candidates]}')
 
 
 meta_df = pd.read_csv('data/pefa-assessments.csv')
@@ -97,6 +104,7 @@ for index, row in meta_df_to_process.iterrows():
     download_pdf(row['Link to Content'], row['Language'], row['Country'])
 
 find_tables('English')
+find_tables('French')
 
 
 # df = tabula.read_pdf("data/pdfs/711.pdf", pages='164')[0]
