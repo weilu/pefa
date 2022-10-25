@@ -11,15 +11,17 @@ import glob
 # report language and primary, secondary, and tertiary keywords to use for table detection
 config = {
     'English': ("(?:Calculation(?:s)?|Data) (?:.* )?pi",
-                ['budg(?:et)?', '(?:actu(?:al)?)'],
-                ['data for year', 'deviation', 'administrative']),
+                ['budg(?:et)?', '(?:actu(?:al)?|Execution)'],
+                ['(?:data for (?:the )?year|Data on (?:the functional classification|economic categories){1} for)', 'deviation', '(?:administrative|Functional head)']),
     'French': ("(?:Calcul(?:s)?|données|Composition des dépenses effectives) (?:.* )?pi",
                ['(?:prévu|Budg)', '(?:réalis|Ajusté|adjusted)'],
                ["(?:Données pour (?:(?:l’)?année|l'exercice)|Data of year)", 'administra']),
     'Spanish': ("(?:calcular|datos|D a t o s) (?:.* )?(?:id|i d)",
                 ['(?:budget|Inicial)', '(?:actual|Ejecutado)'],
                 ['(?:data for year|Año)', '(?:deviation|Desviación)', '(?:administrative|Sectorial|percent)']),
+    'Portuguese': ("Anexo 4\. Cálculos das variações para os indicadores PI", [], []),
 }
+config['Français'] = config['French']
 
 def get_pdf_file_path(link_to_content, language, country):
     parts = urlsplit(link_to_content)
@@ -46,9 +48,11 @@ def page_has_table(pdf_path, page):
 
 def find_tables(language, only_pdf=None):
     keyword, secondary_keywords, tertiary_keywords = config[language]
+    results = []
     for report in sorted(glob.glob(f'data/pdfs/{language}_*.pdf')):
         if only_pdf and report != only_pdf:
             continue
+        table_start_page = None
         obj = PyPDF2.PdfFileReader(report)
         num_pages = obj.getNumPages()
         start_page = num_pages // 3 * 2 # assume the annex is in the last third of all pages
@@ -58,6 +62,9 @@ def find_tables(language, only_pdf=None):
             page = obj.getPage(i)
             text = page.extractText()
             if re.search(keyword, text, flags=re.IGNORECASE):
+                if not secondary_keywords:
+                    candidates.append((i, text))
+                    continue
                 secondary_founds = list(re.search(sk, text, flags=re.IGNORECASE) for sk in secondary_keywords)
                 found = all(secondary_founds)
                 if found:
@@ -71,31 +78,37 @@ def find_tables(language, only_pdf=None):
                     found_on_next_page = all(re.search(sk, next_text, flags=re.IGNORECASE) for sk in secondary_keywords)
                     if found:
                         candidates.append((j, next_text))
-        start_identified = False
         if len(candidates) == 1:
-            print(f"    (only candidate) table start on Page: {candidates[0][0]+1}") # 0 index, so +1 for human
-            start_identified = True
+            table_start_page = candidates[0][0]+1 # 0 index, so +1 for human
+            print(f"    (only candidate) table start on Page: {table_start_page}")
         elif len(candidates) > 1:
             for page, text in candidates:
+                if not tertiary_keywords:
+                    table_start_page = page+1
+                    print(f"   (filtered candidate) table start on Page: {table_start_page}")
+                    break
                 found = any(re.search(key, text, flags=re.IGNORECASE) for key in tertiary_keywords)
                 if found:
-                    print(f"   (filtered candidate) table start on Page: {page+1}") # 0 index, so +1 for human
-                    start_identified = True
+                    table_start_page = page+1
+                    print(f"   (filtered candidate) table start on Page: {table_start_page}")
                     break
-        if not start_identified:
+        if not table_start_page:
             # Try again requiring all of secondary and tertiary keywords to be present
             for i in range(start_page, num_pages):
                 page = obj.getPage(i)
                 text = page.extractText()
                 keys = secondary_keywords + tertiary_keywords
-                results = list(re.search(key, text, flags=re.IGNORECASE) for key in keys)
-                secondary_tertiary_found = all(results)
+                secondary_tertiary_found = all(re.search(key, text, flags=re.IGNORECASE) for key in keys)
                 if secondary_tertiary_found:
-                    print(f"    (second chance) table start on Page: {i+1}") # 0 index, so +1 for human
-                    start_identified = True
+                    table_start_page = i+1
+                    print(f"    (second chance) table start on Page: {table_start_page}")
                     break
-            if not start_identified:
+            if not table_start_page:
                 print(f'[WARNING] start page not found for {report}!!! {len(candidates)} candidates: {[c[0]+1 for c in candidates]}')
+        code = re.search('_(\d+)\.pdf', report).group(1)
+        result = {'code': code, 'pdf': report, 'table_start_page': table_start_page}
+        results.append(result)
+    return results
 
 
 meta_df = pd.read_csv('data/pefa-assessments.csv')
@@ -105,10 +118,12 @@ meta_df_to_process = meta_df[(meta_df.Type == 'National') & (meta_df.Availabilit
 for index, row in meta_df_to_process.iterrows():
     download_pdf(row['Link to Content'], row['Language'], row['Country'])
 
-find_tables('English')
-find_tables('French')
-find_tables('Spanish')
-
+stage1_processed_pdfs = []
+for lang in meta_df_to_process.Language.unique():
+    stage1_processed_pdfs += find_tables(lang)
+stage1_df = pd.DataFrame(stage1_processed_pdfs)
+stage1_df = stage1_df.astype({'table_start_page': 'Int64'})
+stage1_df.to_csv('data/stage1.csv', index=False)
 
 # df = tabula.read_pdf("data/pdfs/711.pdf", pages='164')[0]
 # df.to_csv('data/afk_2014.csv')
