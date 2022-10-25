@@ -7,6 +7,8 @@ from pathlib import Path
 import PyPDF2
 import re
 import glob
+import unicodedata
+
 
 # report language and primary, secondary, and tertiary keywords to use for table detection
 config = {
@@ -21,7 +23,7 @@ config = {
                 ['(?:data for year|Año)', '(?:deviation|Desviación)', '(?:administrative|Sectorial|percent)']),
     'Portuguese': ("Anexo 4\. Cálculos das variações para os indicadores PI", [], []),
 }
-config['Français'] = config['French']
+config['Français'] = config['French']
 
 def get_pdf_file_path(link_to_content, language, country):
     parts = urlsplit(link_to_content)
@@ -49,7 +51,7 @@ def page_has_table(pdf_path, page):
 def find_tables(language, only_pdf=None):
     keyword, secondary_keywords, tertiary_keywords = config[language]
     results = []
-    for report in sorted(glob.glob(f'data/pdfs/{language}_*.pdf')):
+    for report in sorted(glob.glob(f"data/pdfs/{unicodedata.normalize('NFKD', language)}_*.pdf")):
         if only_pdf and report != only_pdf:
             continue
         table_start_page = None
@@ -111,7 +113,7 @@ def find_tables(language, only_pdf=None):
     return results
 
 
-meta_df = pd.read_csv('data/pefa-assessments.csv')
+meta_df = pd.read_csv('data/pefa-assessments.csv', encoding='utf-8')
 meta_df_to_process = meta_df[(meta_df.Type == 'National') & (meta_df.Availability == 'Public') & (meta_df.Framework == '2016 Framework')]
 
 # takes a few minutes (<5min) to complete
@@ -123,6 +125,11 @@ for lang in meta_df_to_process.Language.unique():
     stage1_processed_pdfs += find_tables(lang)
 stage1_df = pd.DataFrame(stage1_processed_pdfs)
 stage1_df = stage1_df.astype({'table_start_page': 'Int64'})
+stage1_df['Link to Content'] = 'https://www.pefa.org/node/' + stage1_df.code
+stage1_df['table_last_page'] = ''
+stage1_df['comment'] = ''
+columns_ordered = ['code', 'pdf', 'Link to Content', 'table_start_page', 'table_last_page']
+stage1_df = stage1_df.reindex(columns=columns_ordered)
 stage1_df.to_csv('data/stage1.csv', index=False)
 
 # df = tabula.read_pdf("data/pdfs/711.pdf", pages='164')[0]
