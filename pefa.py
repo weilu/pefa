@@ -9,7 +9,6 @@ import re
 import glob
 
 # report language and primary, secondary, and tertiary keywords to use for table detection
-# TODO: deal with non-English docs
 config = {
     'English': ("(?:Calculation(?:s)?|Data) (?:.* )?pi",
                 ['budg(?:et)?', '(?:actu(?:al)?)'],
@@ -17,6 +16,9 @@ config = {
     'French': ("(?:Calcul(?:s)?|données|Composition des dépenses effectives) (?:.* )?pi",
                ['(?:prévu|Budg)', '(?:réalis|Ajusté|adjusted)'],
                ["(?:Données pour (?:(?:l’)?année|l'exercice)|Data of year)", 'administra']),
+    'Spanish': ("(?:calcular|datos|D a t o s) (?:.* )?(?:id|i d)",
+                ['(?:budget|Inicial)', '(?:actual|Ejecutado)'],
+                ['(?:data for year|Año)', '(?:deviation|Desviación)', '(?:administrative|Sectorial|percent)']),
 }
 
 def get_pdf_file_path(link_to_content, language, country):
@@ -105,6 +107,7 @@ for index, row in meta_df_to_process.iterrows():
 
 find_tables('English')
 find_tables('French')
+find_tables('Spanish')
 
 
 # df = tabula.read_pdf("data/pdfs/711.pdf", pages='164')[0]
