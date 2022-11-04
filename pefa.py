@@ -5,10 +5,11 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlsplit
 from pathlib import Path
 import PyPDF2
+# import camelot
 import re
 import glob
 import unicodedata
-# import camelot
+from io import StringIO
 
 
 # report language and primary, secondary, and tertiary keywords to use for table detection
@@ -137,20 +138,71 @@ def detect_table_start():
     stage1_df = stage1_df.reindex(columns=columns_ordered)
     stage1_df.to_csv('data/stage1.csv', index=False)
 
+
+def total_num_cols(tables):
+    return sum(len(t.columns) for t in tables)
+
+def max_num_cols(tables):
+    return max(len(t.columns) for t in tables)
+
+def unnamed_cols(total):
+    return list(f'Unnamed {i}' for i in range(total))
+
+def get_padded_column_names(df, num_cols):
+    return df.columns.tolist() + unnamed_cols(num_cols-len(df.columns))
+
+# TODO: handle image tables
+def extract_p1_p2_p3_tables():
+    stage1_df = pd.read_csv('data/stage1_reviewed.csv', encoding='utf-8')
+    stage1_df = stage1_df.astype({'table_start_page': 'Int64', 'table_last_page': 'Int64'})
+    for index, row in stage1_df.iterrows():
+        if row.pdf == 'data/pdfs/English_Kyrgyz Republic_181.pdf': # TODO: remove once image tables are handled
+            continue
+        pages = None
+        if pd.notnull(row.table_start_page):
+            pages = f'{row.table_start_page-1}-{row.table_last_page}'
+        if not pages:
+            print(f'No table in pdf {row.pdf}, skipping')
+            continue
+        tables_lattice = tabula.read_pdf(row.pdf, pages=pages, lattice=True)
+        num_cols_lattice = total_num_cols(tables_lattice)
+        tables_stream = tabula.read_pdf(row.pdf, pages=pages, stream=True)
+        num_cols_stream = total_num_cols(tables_stream)
+        print(f'{row.pdf} lattice tables & columns: {len(tables_lattice)} {num_cols_lattice}, stream tables & columns:{len(tables_stream)} {num_cols_stream}')
+        if len(tables_lattice) < 30 and num_cols_lattice < 30 and num_cols_lattice >= num_cols_stream:
+            tables = tables_lattice
+        else:
+            tables = tables_stream
+        # tables = camelot.read_pdf(row.pdf, pages=pages)
+        folder_name = f"data/csvs_consolidated"
+        Path(folder_name).mkdir(parents=True, exist_ok=True)
+        num_cols = max_num_cols(tables)
+        csv_content = ''
+        for table in tables:
+            cleaned = table.dropna(axis=0, how='all').dropna(axis=1, how='all')
+            if len(cleaned.columns) < num_cols:
+                cleaned = cleaned.reindex(columns=get_padded_column_names(cleaned, num_cols))
+            csv_content += cleaned.to_csv(index=False)
+        # print(csv_content)
+        csv_io = StringIO(csv_content)
+        df = pd.read_csv(csv_io, sep=',', header=None)
+        filename = Path(row.pdf).stem
+        language, country, report_id = filename.split('_')
+        report_df = pd.DataFrame({
+            'Language': [language],
+            'Country': [country],
+            'Report ID': [report_id],
+            'Link to Report': [row['Link to Content']],
+            'table_start_page': [row.table_start_page],
+            'table_last_page': [row.table_last_page],
+            'Detected Table Year': [''], # TODO: populate me
+            'Detected Table Type': [''], # TODO: populate me
+            'Detected Currency': [''], # TODO: populate me
+            })
+        report_df = df.align(report_df, axis=0, method='pad')[1]
+        combined = pd.concat([report_df, df], axis=1)
+        combined.to_csv(f'{folder_name}/{filename}.csv', index=False)
+
 # detect_table_start()
-stage1_df = pd.read_csv('data/stage1_reviewed.csv', encoding='utf-8')
-stage1_df = stage1_df.astype({'table_start_page': 'Int64', 'table_last_page': 'Int64'})
-for index, row in stage1_df.iterrows():
-    pages = None
-    if pd.notnull(row.table_start_page):
-        pages = f'{row.table_start_page-1}-{row.table_last_page-1}'
-    if not pages:
-        print(f'No table in pdf {row.pdf}, skipping')
-        continue
-    tables = tabula.read_pdf(row.pdf, pages=pages)
-    folder_name = f"data/csvs/{Path(row.pdf).stem}"
-    Path(folder_name).mkdir(parents=True, exist_ok=True)
-    for i, table in enumerate(tables):
-        table.to_csv(f'{folder_name}/{i}.csv')
-    # tables = camelot.read_pdf(row.pdf, pages=pages, backend="poppler")
+extract_p1_p2_p3_tables()
 
