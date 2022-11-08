@@ -10,6 +10,8 @@ import re
 import glob
 import unicodedata
 from io import StringIO
+import statistics
+import csv
 
 
 # report language and primary, secondary, and tertiary keywords to use for table detection
@@ -139,8 +141,8 @@ def detect_table_start():
     stage1_df.to_csv('data/stage1.csv', index=False)
 
 
-def total_num_cols(tables):
-    return sum(len(t.columns) for t in tables)
+def median_num_cols(tables):
+    return statistics.median(len(t.columns) for t in tables)
 
 def max_num_cols(tables):
     return max(len(t.columns) for t in tables)
@@ -165,9 +167,9 @@ def extract_p1_p2_p3_tables():
             print(f'No table in pdf {row.pdf}, skipping')
             continue
         tables_lattice = tabula.read_pdf(row.pdf, pages=pages, lattice=True)
-        num_cols_lattice = total_num_cols(tables_lattice)
+        num_cols_lattice = median_num_cols(tables_lattice)
         tables_stream = tabula.read_pdf(row.pdf, pages=pages, stream=True)
-        num_cols_stream = total_num_cols(tables_stream)
+        num_cols_stream = median_num_cols(tables_stream)
         print(f'{row.pdf} lattice tables & columns: {len(tables_lattice)} {num_cols_lattice}, stream tables & columns:{len(tables_stream)} {num_cols_stream}')
         if len(tables_lattice) < 30 and num_cols_lattice < 30 and num_cols_lattice >= num_cols_stream:
             tables = tables_lattice
@@ -182,10 +184,26 @@ def extract_p1_p2_p3_tables():
             cleaned = table.dropna(axis=0, how='all').dropna(axis=1, how='all')
             if len(cleaned.columns) < num_cols:
                 cleaned = cleaned.reindex(columns=get_padded_column_names(cleaned, num_cols))
-            csv_content += cleaned.to_csv(index=False)
+            csv_content += cleaned.to_csv(index=False, quoting=csv.QUOTE_ALL)
         # print(csv_content)
         csv_io = StringIO(csv_content)
-        df = pd.read_csv(csv_io, sep=',', header=None)
+        df = pd.read_csv(csv_io, quoting=csv.QUOTE_ALL)
+        single_column_df = pd.Series(df.fillna('').values.tolist())\
+                .str.join(',')\
+                .replace('(?i),?unnamed:? \d+', '', regex=True)
+        detected_table_year = single_column_df.str\
+                .extract('data for (?:the )?year\W*([^,]*?)(?:,|$)', flags=re.IGNORECASE)\
+                .fillna(method='pad')
+        detected_table_type = single_column_df.str\
+                .extract('(administrative|economic head|data for (?:the )?year|tax revenues)', flags=re.IGNORECASE)\
+                .fillna(method='pad')\
+                .fillna('')\
+                .replace('(?i)tax revenues', 'Revenue', regex=True)\
+                .replace('(?i)data for .*', '', regex=True)\
+                [0].str.title()
+        detected_currency = single_column_df.str\
+                .extract('currency\W*([^,]*)', flags=re.IGNORECASE)\
+                .fillna(method='pad')
         filename = Path(row.pdf).stem
         language, country, report_id = filename.split('_')
         report_df = pd.DataFrame({
@@ -195,13 +213,14 @@ def extract_p1_p2_p3_tables():
             'Link to Report': [row['Link to Content']],
             'table_start_page': [row.table_start_page],
             'table_last_page': [row.table_last_page],
-            'Detected Table Year': [''], # TODO: populate me
-            'Detected Table Type': [''], # TODO: populate me
-            'Detected Currency': [''], # TODO: populate me
             })
         report_df = df.align(report_df, axis=0, method='pad')[1]
-        combined = pd.concat([report_df, df], axis=1)
-        combined.to_csv(f'{folder_name}/{filename}.csv', index=False)
+        report_df['Detected Table Year'] = detected_table_year
+        report_df['Detected Table Type'] = detected_table_type
+        report_df['Detected Currency'] = detected_currency
+        combined = pd.concat([report_df, df], axis=1)\
+                .astype({'table_start_page': 'Int64', 'table_last_page': 'Int64'})
+        combined.to_csv(f'{folder_name}/{filename}.csv', index=False, quoting=csv.QUOTE_NONNUMERIC)
 
 # detect_table_start()
 extract_p1_p2_p3_tables()
