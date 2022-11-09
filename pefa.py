@@ -29,6 +29,8 @@ config = {
 }
 config['Français'] = config['French']
 
+STAGE2_SOURCE_CSV_FOLDER = f"data/csvs_consolidated"
+
 def get_pdf_file_path(link_to_content, language, country):
     parts = urlsplit(link_to_content)
     node_number = parts.path.split('/')[-1]
@@ -176,8 +178,7 @@ def extract_p1_p2_p3_tables():
         else:
             tables = tables_stream
         # tables = camelot.read_pdf(row.pdf, pages=pages)
-        folder_name = f"data/csvs_consolidated"
-        Path(folder_name).mkdir(parents=True, exist_ok=True)
+        Path(STAGE2_SOURCE_CSV_FOLDER).mkdir(parents=True, exist_ok=True)
         num_cols = max_num_cols(tables)
         csv_content = ''
         for table in tables:
@@ -187,7 +188,7 @@ def extract_p1_p2_p3_tables():
             csv_content += cleaned.to_csv(index=False, quoting=csv.QUOTE_ALL)
         # print(csv_content)
         csv_io = StringIO(csv_content)
-        df = pd.read_csv(csv_io, quoting=csv.QUOTE_ALL)
+        df = pd.read_csv(csv_io, header=None, quoting=csv.QUOTE_ALL)
         single_column_df = pd.Series(df.fillna('').values.tolist())\
                 .str.join(',')\
                 .replace('(?i),?unnamed:? \d+', '', regex=True)
@@ -220,8 +221,29 @@ def extract_p1_p2_p3_tables():
         report_df['Detected Currency'] = detected_currency
         combined = pd.concat([report_df, df], axis=1)\
                 .astype({'table_start_page': 'Int64', 'table_last_page': 'Int64'})
-        combined.to_csv(f'{folder_name}/{filename}.csv', index=False, quoting=csv.QUOTE_NONNUMERIC)
+        combined.to_csv(f'{STAGE2_SOURCE_CSV_FOLDER}/{filename}.csv', index=False, quoting=csv.QUOTE_NONNUMERIC)
 
 # detect_table_start()
-extract_p1_p2_p3_tables()
+# extract_p1_p2_p3_tables()
 
+stage2_dfs = []
+for filename in glob.glob(f'{STAGE2_SOURCE_CSV_FOLDER}/*.csv'):
+    stage2_dfs.append(pd.read_csv(filename, quoting=csv.QUOTE_NONNUMERIC))
+num_cols = max_num_cols(stage2_dfs)
+column_names = stage2_dfs[0].columns[0:9].tolist() + unnamed_cols(num_cols-9)
+stage2_dfs_padded = []
+for table in stage2_dfs:
+    if len(table.columns) < num_cols:
+        padded = table.reindex(columns=get_padded_column_names(table, num_cols))
+    else:
+        padded = table
+    padded.columns = column_names
+    stage2_dfs_padded.append(padded)
+stage2_df = pd.concat(stage2_dfs_padded, ignore_index=True)\
+        .astype({
+            'Report ID': 'Int64',
+            'table_start_page': 'Int64',
+            'table_last_page': 'Int64',
+        })\
+        .sort_values(['Language', 'Country', 'Report ID'])
+stage2_df.to_csv('data/stage2.csv', index=False, quoting=csv.QUOTE_NONNUMERIC)
